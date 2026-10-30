@@ -1,0 +1,15 @@
+[package]
+name = "oar_worker"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "doc2md warm OCR sidecar using oar-ocr (stdin protocol like tools/ocr_cli.py)"
+
+[[bin]]
+name = "oar_worker"
+path = "src/main.rs"
+
+[dependencies]
+oar-ocr = { version = "0.10.1", default-features = true, features = ["auto-download"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
