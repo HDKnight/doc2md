@@ -9,6 +9,9 @@
   const statusEl = document.getElementById("status");
   const resultPanel = document.getElementById("resultPanel");
   const meta = document.getElementById("meta");
+  const statPages = document.getElementById("statPages");
+  const statOCR = document.getElementById("statOCR");
+  const statRate = document.getElementById("statRate");
   const previewView = document.getElementById("previewView");
   const sourceView = document.getElementById("sourceView");
   const textView = document.getElementById("textView");
@@ -419,6 +422,9 @@
     clearBtn.disabled = true;
     resultPanel.hidden = true;
     meta.innerHTML = "";
+    statPages.textContent = "—";
+    statOCR.textContent = "—";
+    statRate.textContent = "—";
     previewView.innerHTML = "";
     sourceView.textContent = "";
     textView.textContent = "";
@@ -496,16 +502,13 @@
         payload.engine ? `<span>引擎 <b>${escapeHtml(payload.engine)}</b></span>` : "",
         lastMarkdown ? `<span>MD <b>${lastMarkdown.length}</b> 字</span>` : "",
         lastText ? `<span>原文 <b>${lastText.length}</b> 字</span>` : "",
-        ...ocrStatsMeta(payload.ocr_stats),
       ].filter(Boolean).join("");
 
+      const shown = fillRecognize(payload);
       fillViews();
       applyTabVisibility();
       resultPanel.hidden = false;
-      const ocrHint = formatOCRStatsHint(payload.ocr_stats);
-      setStatus("info", ocrHint
-        ? `转换完成 · ${ocrHint}`
-        : "转换完成 · 切换预览/源码/原文会定位到当前位置");
+      setStatus("info", `转换完成 · 页数 ${shown.pages} · OCR ${shown.ocr} 页 · ${shown.rate}`);
     } catch (err) {
       setStatus("error", err.message || String(err));
     } finally {
@@ -548,23 +551,22 @@
       .replaceAll('"', "&quot;");
   }
 
-  function ocrStatsMeta(stats) {
-    if (!stats || !stats.used) return [];
-    const avg = Number(stats.avg_ms_per_page || 0);
-    const totalSec = (Number(stats.total_ms || 0) / 1000).toFixed(1);
-    const avgSec = (avg / 1000).toFixed(2);
-    return [
-      stats.model ? `<span>OCR 模型 <b>${escapeHtml(stats.model)}</b></span>` : "",
-      `<span>OCR 总时长 <b>${totalSec}s</b></span>`,
-      `<span>每页平均 <b>${avgSec}s</b>（${stats.pages || 0} 页）</span>`,
-    ];
-  }
-
-  function formatOCRStatsHint(stats) {
-    if (!stats || !stats.used) return "";
-    const totalSec = (Number(stats.total_ms || 0) / 1000).toFixed(1);
-    const avgSec = (Number(stats.avg_ms_per_page || 0) / 1000).toFixed(2);
-    return `OCR ${stats.model || ""} · 总 ${totalSec}s · 均 ${avgSec}s/页 · ${stats.pages || 0} 页`;
+  function fillRecognize(payload) {
+    const rec = payload.recognize || {};
+    const isPDF = payload.format === "pdf";
+    const pages = Number(rec.pages || 0);
+    const ocr = Number(rec.ocr_pages || 0);
+    const rate = Number(rec.pages_per_sec || 0);
+    const pagesText = isPDF ? String(pages) : "—";
+    const ocrText = String(ocr);
+    let rateText = "—";
+    if (rate > 0) {
+      rateText = `${rate >= 10 ? rate.toFixed(1) : rate.toFixed(2)} 页/秒`;
+    }
+    statPages.textContent = pagesText;
+    statOCR.textContent = ocrText;
+    statRate.textContent = rateText;
+    return { pages: pagesText, ocr: ocrText, rate: rateText };
   }
 
 })();

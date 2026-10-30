@@ -10,12 +10,21 @@ import (
 
 // Result is the conversion output.
 type Result struct {
-	Filename string    `json:"filename"`
-	Format   string    `json:"format"`
-	Engine   string    `json:"engine"`
-	Text     string    `json:"text"`
-	Markdown string    `json:"markdown"`
-	OCRStats *OCRStats `json:"ocr_stats,omitempty"`
+	Filename  string     `json:"filename"`
+	Format    string     `json:"format"`
+	Engine    string     `json:"engine"`
+	Text      string     `json:"text"`
+	Markdown  string     `json:"markdown"`
+	Recognize *Recognize `json:"recognize,omitempty"`
+	OCRStats  *OCRStats  `json:"ocr_stats,omitempty"`
+}
+
+// Recognize is shown in the UI: page count, OCR page count, and pages per second.
+type Recognize struct {
+	Pages       int     `json:"pages"`
+	OCRPages    int     `json:"ocr_pages"`
+	TotalMs     int64   `json:"total_ms"`
+	PagesPerSec float64 `json:"pages_per_sec"`
 }
 
 // OCRStats reports recognition timing when structure/OCR ran.
@@ -50,11 +59,12 @@ func Convert(ctx context.Context, filename string, data []byte, opt Options) (*R
 		return nil, err
 	}
 	out := &Result{
-		Filename: er.Filename,
-		Format:   er.Format,
-		Engine:   er.Engine,
-		Text:     er.Text,
-		Markdown: er.Markdown,
+		Filename:  er.Filename,
+		Format:    er.Format,
+		Engine:    er.Engine,
+		Text:      er.Text,
+		Markdown:  er.Markdown,
+		Recognize: recognizeOf(er.Pages, er.OCRPages, er.ElapsedMs),
 	}
 	if er.OCRStats != nil {
 		out.OCRStats = &OCRStats{
@@ -66,4 +76,21 @@ func Convert(ctx context.Context, filename string, data []byte, opt Options) (*R
 		}
 	}
 	return out, nil
+}
+
+func recognizeOf(pages, ocrPages int, elapsedMs int64) *Recognize {
+	basis := pages
+	if ocrPages > 0 {
+		basis = ocrPages
+	}
+	var rate float64
+	if basis > 0 && elapsedMs > 0 {
+		rate = float64(basis) / (float64(elapsedMs) / 1000)
+	}
+	return &Recognize{
+		Pages:       pages,
+		OCRPages:    ocrPages,
+		TotalMs:     elapsedMs,
+		PagesPerSec: rate,
+	}
 }

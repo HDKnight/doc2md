@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"doc2md/engine/oarx"
@@ -18,12 +19,15 @@ import (
 
 // Result is conversion output from engine path.
 type Result struct {
-	Filename string
-	Format   string
-	Engine   string
-	Text     string
-	Markdown string
-	OCRStats *oarx.Stats
+	Filename  string
+	Format    string
+	Engine    string
+	Text      string
+	Markdown  string
+	Pages     int
+	OCRPages  int
+	ElapsedMs int64
+	OCRStats  *oarx.Stats
 }
 
 // Options for ingest.
@@ -52,6 +56,7 @@ func Convert(ctx context.Context, filename string, data []byte, opt Options) (*R
 }
 
 func convertPDF(ctx context.Context, filename string, data []byte, dpi int) (*Result, error) {
+	t0 := time.Now()
 	// 先抽文字层；够用则用行框字号定标题，不走 OCR
 	pageLines, err := pdf.ExtractLinesFromBytes(data)
 	if err != nil {
@@ -61,11 +66,14 @@ func convertPDF(ctx context.Context, filename string, data []byte, dpi int) (*Re
 	if !pdf.NeedsOCR(flat, pdf.OCRAuto, 50) {
 		pages, plain := pagesFromPDFLines(pageLines)
 		return &Result{
-			Filename: filename,
-			Format:   "pdf",
-			Engine:   "engine-pdf-text",
-			Text:     plain,
-			Markdown: pipeline.MarkdownFromPages(pages),
+			Filename:  filename,
+			Format:    "pdf",
+			Engine:    "engine-pdf-text",
+			Text:      plain,
+			Markdown:  pipeline.MarkdownFromPages(pages),
+			Pages:     len(pageLines),
+			OCRPages:  0,
+			ElapsedMs: time.Since(t0).Milliseconds(),
 		}, nil
 	}
 	// 扫描件 / 少字 / 乱码 → oar structure JSON
@@ -73,13 +81,32 @@ func convertPDF(ctx context.Context, filename string, data []byte, dpi int) (*Re
 	if err != nil {
 		return nil, err
 	}
+	ocrPages := 0
+	var elapsed int64
+	if stats != nil {
+		ocrPages = stats.Pages
+		elapsed = stats.TotalMs
+	}
+	if elapsed <= 0 {
+		elapsed = time.Since(t0).Milliseconds()
+	}
+	totalPages := len(pageLines)
+	if totalPages < ocrPages {
+		totalPages = ocrPages
+	}
+	if totalPages < len(pages) {
+		totalPages = len(pages)
+	}
 	return &Result{
-		Filename: filename,
-		Format:   "pdf",
-		Engine:   "engine-oar-json",
-		Text:     plain,
-		Markdown: pipeline.MarkdownFromPages(pages),
-		OCRStats: stats,
+		Filename:  filename,
+		Format:    "pdf",
+		Engine:    "engine-oar-json",
+		Text:      plain,
+		Markdown:  pipeline.MarkdownFromPages(pages),
+		Pages:     totalPages,
+		OCRPages:  ocrPages,
+		ElapsedMs: elapsed,
+		OCRStats:  stats,
 	}, nil
 }
 
