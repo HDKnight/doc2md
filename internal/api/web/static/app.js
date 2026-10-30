@@ -2,13 +2,8 @@
   const dropzone = document.getElementById("dropzone");
   const fileInput = document.getElementById("file");
   const fileName = document.getElementById("fileName");
-  const ocr = document.getElementById("ocr");
-  const ocrModel = document.getElementById("ocrModel");
-  const ocrUseCls = document.getElementById("ocrUseCls");
-  const pipeline = document.getElementById("pipeline");
-  const featEngine = document.getElementById("featEngine");
-  const featEngineField = document.getElementById("featEngineField");
   const convertBtn = document.getElementById("convertBtn");
+  const copyBtn = document.getElementById("copyBtn");
   const downloadBtn = document.getElementById("downloadBtn");
   const clearBtn = document.getElementById("clearBtn");
   const statusEl = document.getElementById("status");
@@ -48,8 +43,8 @@
   function setFile(file) {
     if (!file) return;
     const name = file.name.toLowerCase();
-    if (!name.endsWith(".pdf") && !name.endsWith(".docx")) {
-      setStatus("error", "仅支持 .pdf 或 .docx");
+    if (!name.endsWith(".pdf") && !name.endsWith(".docx") && !name.endsWith(".txt")) {
+      setStatus("error", "仅支持 .pdf、.docx 或 .txt");
       return;
     }
     if (file.size > 50 * 1024 * 1024) {
@@ -57,7 +52,8 @@
       return;
     }
     selectedFile = file;
-    fileName.textContent = `${file.name}（${formatSize(file.size)}）`;
+    fileName.textContent = `${file.name} · ${formatSize(file.size)}`;
+    dropzone.classList.add("has-file");
     convertBtn.disabled = false;
     clearBtn.disabled = false;
     setStatus("", "");
@@ -113,7 +109,10 @@
     tabMarkdown.setAttribute("aria-selected", isSource ? "true" : "false");
     tabText.setAttribute("aria-selected", isText ? "true" : "false");
 
-    downloadBtn.disabled = !(isText ? lastText : lastMarkdown);
+    const downloadable = isText ? lastText : lastMarkdown;
+    downloadBtn.disabled = !downloadable;
+    downloadBtn.textContent = isText ? "下载原文" : "下载 Markdown";
+    copyBtn.disabled = !lastMarkdown;
   }
 
   function scrollRatio(el) {
@@ -412,8 +411,11 @@
     contentReady = false;
     fileInput.value = "";
     fileName.textContent = "未选择文件";
+    dropzone.classList.remove("has-file");
     convertBtn.disabled = true;
+    copyBtn.disabled = true;
     downloadBtn.disabled = true;
+    downloadBtn.textContent = "下载";
     clearBtn.disabled = true;
     resultPanel.hidden = true;
     meta.innerHTML = "";
@@ -460,17 +462,13 @@
   convertBtn.addEventListener("click", async () => {
     if (!selectedFile) return;
     convertBtn.disabled = true;
+    copyBtn.disabled = true;
     downloadBtn.disabled = true;
     setStatus("info", "转换中…");
     resultPanel.hidden = true;
 
     const form = new FormData();
     form.append("file", selectedFile);
-    form.append("ocr", ocr.value);
-    form.append("ocr_model", ocrModel?.value || "tiny");
-    form.append("ocr_use_cls", ocrUseCls?.checked ? "1" : "0");
-    form.append("pipeline", pipeline?.value || "geom");
-    if (featEngine) form.append("feat_engine", featEngine.value || "oar");
 
     try {
       const res = await fetch("/convert", { method: "POST", body: form });
@@ -489,7 +487,7 @@
 
       lastMarkdown = payload.markdown || "";
       lastText = payload.text || "";
-      lastBaseName = selectedFile.name.replace(/\.(pdf|docx)$/i, "");
+      lastBaseName = selectedFile.name.replace(/\.(pdf|docx|txt)$/i, "");
       viewMode = "preview";
 
       meta.innerHTML = [
@@ -512,6 +510,16 @@
       setStatus("error", err.message || String(err));
     } finally {
       convertBtn.disabled = !selectedFile;
+    }
+  });
+
+  copyBtn.addEventListener("click", async () => {
+    if (!lastMarkdown) return;
+    try {
+      await navigator.clipboard.writeText(lastMarkdown);
+      setStatus("info", "已复制 Markdown");
+    } catch {
+      setStatus("error", "复制失败，请在源码视图里手动复制");
     }
   });
 
@@ -559,11 +567,4 @@
     return `OCR ${stats.model || ""} · 总 ${totalSec}s · 均 ${avgSec}s/页 · ${stats.pages || 0} 页`;
   }
 
-  function syncFeatEngineUI() {
-    const isFeat = (pipeline?.value || "") === "geom";
-    if (featEngineField) featEngineField.hidden = !isFeat;
-    if (featEngine) featEngine.disabled = !isFeat;
-  }
-  pipeline?.addEventListener("change", syncFeatEngineUI);
-  syncFeatEngineUI();
 })();
