@@ -2,6 +2,10 @@
 /dist/
 *.exe
 *.exe~
+!/doc2md.exe
+!/tools/oar.exe
+!/tools/oar_structure_worker.exe
+!/tools/oar_worker.exe
 *.test
 /models/
 .idea/

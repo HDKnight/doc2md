@@ -47,7 +47,16 @@ DOC2MD_ADDR=:8484 go run ./cmd/server
 
 ## Windows 一键启动
 
-先编译，再双击 `start.bat`（或 `start.bat 9000`）。首次会用 `ensure-deps.ps1` 准备便携 Python、Poppler 和 `tools\oar.exe`（本机已有 `oar` 则复制，否则 `cargo install oar-ocr-cli`）。`stop.bat` 停止服务。
+仓库已带上 Windows 编译结果，不用再编 Go / Rust：
+
+| 文件 | 作用 |
+|------|------|
+| `doc2md.exe` | 服务本体 |
+| `tools\oar.exe` | 扫描件表征 |
+| `tools\oar_structure_worker.exe` | 常驻 structure |
+| `tools\oar_worker.exe` | 常驻 OCR |
+
+双击 `start.bat`（或 `start.bat 9000`）。首次会用 `ensure-deps.ps1` 准备便携 Python 和 Poppler；`tools\oar.exe` 已在仓库里则直接用。`stop.bat` 停止服务。自己改代码后可重新编译：
 
 ```bat
 go build -o doc2md.exe ./cmd/server
