@@ -5,6 +5,75 @@ import (
 	"testing"
 )
 
+func TestWrapJoinFollowsColumnEdge(t *testing.T) {
+	pages := []Page{{
+		Blocks: []Block{
+			// 两行写到同一右缘，栏才成立。满行、紧挨着、未到句末 → 拼。
+			{Type: "text", Content: "它公开申明自己是无产阶级的世", BBox: []float64{35, 100, 555, 113}},
+			{Type: "text", Content: "界观和方法论，不带有任何的宗派性。", BBox: []float64{35, 115, 400, 128}},
+			// 满行但已是句末 → 不拼。
+			{Type: "text", Content: "反映的是马克思主义的精神实质。", BBox: []float64{35, 140, 555, 153}},
+			{Type: "text", Content: "下一句另起。", BBox: []float64{35, 155, 200, 168}},
+			// 没写到右缘 → 不拼，即使下一行就在下面。
+			{Type: "text", Content: "D．用马克思主义基本理论指导中国革命和建设", BBox: []float64{35, 200, 392, 213}},
+			{Type: "text", Content: "【答案】D", BBox: []float64{30, 215, 80, 228}},
+			// 同一基线上左右相邻 → 拼回同一行。
+			{Type: "text", Content: "表2", BBox: []float64{250, 300, 262, 313}},
+			{Type: "text", Content: "马克思主义创立的条件", BBox: []float64{270, 300, 345, 313}},
+			// 满行但垂直间距明显大于一行 → 不拼。
+			{Type: "text", Content: "上一段写到栏的右缘还没结束", BBox: []float64{35, 400, 555, 413}},
+			{Type: "text", Content: "下一段离得远。", BBox: []float64{35, 460, 200, 473}},
+		},
+	}, {
+		// 没有两行共同到达的右缘，最长的一行也不当栏宽。
+		Blocks: []Block{
+			{Type: "text", Content: "导论", BBox: []float64{272, 55, 322, 77}},
+			{Type: "text", Content: "0.1 复习笔记", BBox: []float64{253, 110, 342, 129}},
+		},
+	}}
+	md := MarkdownFromPages(pages)
+	if !strings.Contains(md, "无产阶级的世界观和方法论") {
+		t.Fatalf("full line wrap should join:\n%s", md)
+	}
+	if strings.Contains(md, "精神实质。下一句") {
+		t.Fatalf("sentence end must not join:\n%s", md)
+	}
+	if strings.Contains(md, "建设【答案】") {
+		t.Fatalf("short line must not join:\n%s", md)
+	}
+	if !strings.Contains(md, "表2马克思主义创立的条件") {
+		t.Fatalf("same-baseline fragments should join:\n%s", md)
+	}
+	if strings.Contains(md, "还没结束下一段") {
+		t.Fatalf("large gap must not join:\n%s", md)
+	}
+	if strings.Contains(md, "导论0.1") {
+		t.Fatalf("title-only page must not join its longest line:\n%s", md)
+	}
+	cross := []Page{{
+		Blocks: []Block{
+			{Type: "text", Content: "这行写满栏宽还没有句号所以要接下去", BBox: []float64{35, 100, 555, 113}},
+			{Type: "text", Content: "另一行也写满作为右缘", BBox: []float64{35, 115, 555, 128}},
+			{Type: "text", Content: "短的收尾", BBox: []float64{35, 130, 120, 143}},
+		},
+	}, {
+		Blocks: []Block{
+			{Type: "text", Content: "【例】下一页", BBox: []float64{35, 40, 200, 53}},
+		},
+	}}
+	crossed := MarkdownFromPages(cross)
+	if strings.Contains(crossed, "收尾【例】") {
+		t.Fatalf("short tail must not join the next page:\n%s", crossed)
+	}
+	if !strings.Contains(crossed, "接下去另一行也写满作为右缘短的收尾") {
+		t.Fatalf("in-page wrap should still join:\n%s", crossed)
+	}
+	plain := MarkdownFromLines([]string{"考点二：马克思主义的创立", "1 马克思主义创立的条件"})
+	if strings.Contains(plain, "创立1") {
+		t.Fatalf("lines without boxes must not join:\n%s", plain)
+	}
+}
+
 func TestKeepsPeriodInsideStem(t *testing.T) {
 	pages := []Page{{
 		Blocks: []Block{
@@ -31,6 +100,7 @@ func TestSoftWrapBrokenStem(t *testing.T) {
 			{Type: "text", Content: "18、党在（ A）的思想政治工作是中国军事史上军队政治工作的开始，是党", BBox: []float64{50, 100, 470, 114}},
 			{Type: "text", Content: "在军队中从事思想政治工作的开端。", BBox: []float64{50, 116, 330, 130}},
 			{Type: "text", Content: "A、黄埔军校", BBox: []float64{50, 140, 150, 154}},
+			{Type: "text", Content: "栏右缘参照行。", BBox: []float64{50, 180, 470, 194}},
 		},
 	}}
 	md := MarkdownFromPages(pages)
@@ -94,32 +164,32 @@ func TestSplitGluedOptionsOnly(t *testing.T) {
 }
 
 func TestSoftWrapStemContinuationRelaxedGap(t *testing.T) {
-	// 间距略大：soft-wrap 或定题后的 headingContinues 都应拼上
+	// 行距明显超过一行：即使写到栏右缘也不拼。
 	pages := []Page{{
 		Blocks: []Block{
 			{Type: "text", Content: "18、党在（ A）的思想政治工作是中国军事史上军队政治工作的开始，是党", BBox: []float64{50, 100, 470, 114}},
 			{Type: "text", Content: "在军队中从事思想政治工作的开端。", BBox: []float64{50, 130, 330, 144}},
-			{Type: "text", Content: "A、黄埔军校", BBox: []float64{50, 160, 150, 174}},
+			{Type: "text", Content: "栏右缘参照行。", BBox: []float64{50, 180, 470, 194}},
 		},
 	}}
 	md := MarkdownFromPages(pages)
-	if !strings.Contains(md, "是党在军队中从事") {
-		t.Fatalf("heading fragment join failed:\n%s", md)
+	if strings.Contains(md, "是党在军队中从事") {
+		t.Fatalf("gap past one line must not join:\n%s", md)
 	}
 }
 
-func TestJoinHeadingFragment_LargeGapStillJoins(t *testing.T) {
-	// 几何几乎不挨着：仍靠定题后文本续拼（旧 headingLineContinues）
+func TestLargeGapDoesNotJoin(t *testing.T) {
+	// 垂直方向隔开：不再按文本续拼。
 	pages := []Page{{
 		Blocks: []Block{
 			{Type: "text", Content: "18、党在（ A）的思想政治工作是中国军事史上军队政治工作的开始，是党", BBox: []float64{50, 100, 470, 114}},
 			{Type: "text", Content: "在军队中从事思想政治工作的开端。", BBox: []float64{50, 200, 330, 214}},
-			{Type: "text", Content: "A、黄埔军校", BBox: []float64{50, 230, 150, 244}},
+			{Type: "text", Content: "栏右缘参照行。", BBox: []float64{50, 240, 470, 254}},
 		},
 	}}
 	md := MarkdownFromPages(pages)
-	if !strings.Contains(md, "是党在军队中从事") {
-		t.Fatalf("text-level heading continue failed:\n%s", md)
+	if strings.Contains(md, "是党在军队中从事") {
+		t.Fatalf("large gap must not join:\n%s", md)
 	}
 }
 
@@ -146,10 +216,11 @@ func TestParenShortTitlePeriodSplit(t *testing.T) {
 func TestUnheraldedBreakJoinsUnderOrdinal(t *testing.T) {
 	pages := []Page{{
 		Blocks: []Block{
-			{Type: "text", Content: "(2) 克服无纪律和无政府状态。", BBox: []float64{40, 40, 300, 56}},
-			{Type: "text", Content: "为了克服无纪律和无政府状态，党中央着重从思想上、组织上、制度上加强党的建设。首先，进行政治理论教育，解决思", BBox: []float64{40, 70, 500, 100}},
-			{Type: "text", Content: "想认识问题。其次，建立请示报告制度，保证党的集中统一。", BBox: []float64{40, 200, 500, 230}},
-			{Type: "text", Content: "第一，从思想理论上武装全党。", BBox: []float64{40, 260, 400, 276}},
+			{Type: "text", Content: "(2) 克服无纪律和无政府状态。", BBox: []float64{40, 40, 300, 54}},
+			{Type: "text", Content: "为了克服无纪律和无政府状态，党中央着重从思想上、组织上、制度上加强党的建设。首先，进行政治理论教育，解决思", BBox: []float64{40, 70, 500, 84}},
+			{Type: "text", Content: "想认识问题。其次，建立请示报告制度，保证党的集中统一。", BBox: []float64{40, 86, 420, 100}},
+			{Type: "text", Content: "第一，从思想理论上武装全党。", BBox: []float64{40, 116, 400, 130}},
+			{Type: "text", Content: "栏右缘参照。", BBox: []float64{40, 160, 500, 174}},
 		},
 	}}
 	md := MarkdownFromPages(pages)
@@ -186,14 +257,9 @@ func TestExpandedProseBlockNotHeading(t *testing.T) {
 		"一、单项选择题",
 		"54、毛泽东提出了原则方法。它是指（A ）。",
 	})
-	for _, line := range strings.Split(md, "\n") {
-		tline := strings.TrimSpace(line)
-		if !strings.HasPrefix(tline, "#") {
-			continue
-		}
-		if strings.Contains(tline, "明确坚持") || strings.Contains(tline, "明确新时代") {
-			t.Fatalf("expanded prose must not be heading: %q", tline)
-		}
+	lvl := headingLevel(md)
+	if lvl("明确坚持") < 2 || lvl("明确坚持") != lvl("明确新时代") {
+		t.Fatalf("multi-sentence ordinals stay with their series:\n%s", md)
 	}
 	hasChoice, has54 := false, false
 	for _, line := range strings.Split(md, "\n") {
@@ -209,12 +275,12 @@ func TestExpandedProseBlockNotHeading(t *testing.T) {
 		t.Fatalf("short 一、 and MCQ stem should stay headings:\n%s", md)
 	}
 
-	// 短 OCR title 仍置信；多句 OCR title / 跨页拼成的多句序号标题要降
+	// 短 OCR title 仍置信；无编号的多句 OCR title 要降；有编号的多句保持标题
 	pages := []Page{{
 		Blocks: []Block{
 			{Type: "paragraph_title", Content: "3.新时代中国特色社会主义思想。", BBox: []float64{40, 20, 300, 36}},
 			{Type: "text", Content: "一、明确坚持和发展中国特色社会主义，总任务是实现社会主义现代化和中", BBox: []float64{40, 50, 500, 66}, Order: 1},
-			{Type: "text", Content: "华民族伟大复兴。为了实现这一梦想，我们党提出两个一百年奋斗目标。", BBox: []float64{40, 80, 500, 110}, Order: 2},
+			{Type: "text", Content: "华民族伟大复兴。为了实现这一梦想，我们党提出两个一百年奋斗目标。", BBox: []float64{40, 68, 500, 98}, Order: 2},
 			{Type: "paragraph_title", Content: "“三查三整”的整党运动", BBox: []float64{40, 140, 300, 156}},
 			{Type: "paragraph_title", Content: "明确全面深化改革总目标。改革是决定当代中国命运的关键一招。", BBox: []float64{40, 180, 500, 210}},
 		},
@@ -242,8 +308,8 @@ func TestExpandedProseBlockNotHeading(t *testing.T) {
 	if !shortOCR || !shortSan {
 		t.Fatalf("short OCR titles must stay:\n%s", md2)
 	}
-	if joinedYi {
-		t.Fatalf("cross-join 一、 essay must not stay heading:\n%s", md2)
+	if !joinedYi {
+		t.Fatalf("numbered 一、 stays a heading after wrap:\n%s", md2)
 	}
 	if multiOCR {
 		t.Fatalf("multi-sentence OCR title must demote:\n%s", md2)
@@ -367,5 +433,103 @@ func TestShortLabelColonSplitsBody(t *testing.T) {
 	}
 	if !strings.Contains(md, "1927年秋收") {
 		t.Fatalf("body lost:\n%s", md)
+	}
+}
+
+func TestMultiSentenceOrdinalStaysWithPeers(t *testing.T) {
+	md := MarkdownFromLines([]string{
+		"(3)1848年2月,马克思和恩格斯《共产党宣言》的发表,标志着马克思主义的公开问世,这是第一部全面阐述科学社会主义的伟大著作。",
+		"(4)1867年,马克思撰写的《资本论》第一卷出版,系统阐述了剩余价值学说,揭示了资本主义生产关系的秘密。唯物史观和剩余价值学说是马克思一生的两个伟大发现。",
+		"(5)1876—1878年,恩格斯写出了《反杜林论》,全面阐述了马克思主义理论体系。",
+	})
+	lvl := headingLevel(md)
+	if lvl("(3)") < 2 || lvl("(3)") != lvl("(4)") || lvl("(4)") != lvl("(5)") {
+		t.Fatalf("multi-sentence ordinal stays with its series:\n%s", md)
+	}
+}
+
+func TestExtendedNumberSeries(t *testing.T) {
+	md := MarkdownFromLines([]string{
+		"第一章 总论",
+		"第一节 导入",
+		"1. 总则",
+		"1。另写",
+		"1.1 范围",
+		"1.2 引用",
+		"（一）原则",
+		"（1）细则",
+		"1）补充",
+		"1 科学性",
+		"2 人民性",
+		"a.甲点",
+		"b.乙点",
+		"A、正确",
+		"①第一条",
+		"②第二条",
+		"第二章 分论",
+	})
+	lvl := headingLevel(md)
+	same := func(a, b string) {
+		t.Helper()
+		la, lb := lvl(a), lvl(b)
+		if la < 2 || la != lb {
+			t.Fatalf("%s and %s should share a level, got %d and %d\n%s", a, b, la, lb, md)
+		}
+	}
+	deeper := func(child, parent string) {
+		t.Helper()
+		lc, lp := lvl(child), lvl(parent)
+		if lc != lp+1 {
+			t.Fatalf("%s should sit one level under %s, got %d and %d\n%s", child, parent, lc, lp, md)
+		}
+	}
+	same("第一章", "第二章")
+	deeper("第一节", "第一章")
+	deeper("1.1", "1. 总则")
+	same("1.1", "1.2")
+	deeper("（1）", "（一）")
+	deeper("1）补充", "（1）")
+	same("1 科学性", "2 人民性")
+	deeper("a.甲点", "1 科学性")
+	same("a.甲点", "b.乙点")
+	same("①第一条", "②第二条")
+	if lvl("1。另写") > 0 {
+		t.Fatalf("ideographic period is not a list dot:\n%s", md)
+	}
+	if lvl("A、正确") > 0 {
+		t.Fatalf("uppercase option must not be a heading:\n%s", md)
+	}
+	short := MarkdownFromLines([]string{"a.甲点", "b.乙点", "①第一条", "②第二条", "第一篇 上", "第一章 总"})
+	sl := headingLevel(short)
+	if sl("a.甲点") < 2 || sl("a.甲点") != sl("b.乙点") || sl("①第一条") == sl("a.甲点") || sl("①第一条") != sl("②第二条") {
+		t.Fatalf("letter dot and circle are different types:\n%s", short)
+	}
+	if sl("第一篇") < 2 || sl("第一章") == sl("第一篇") {
+		t.Fatalf("pian and chapter are different types:\n%s", short)
+	}
+	lone := MarkdownFromLines([]string{"3 种看法", "后文"})
+	if headingLevel(lone)("3 种看法") > 0 {
+		t.Fatalf("a single digit-space line is not a heading:\n%s", lone)
+	}
+}
+
+func headingLevel(md string) func(string) int {
+	return func(substr string) int {
+		for _, line := range strings.Split(md, "\n") {
+			t := strings.TrimSpace(line)
+			if !strings.HasPrefix(t, "#") || !strings.Contains(t, substr) {
+				continue
+			}
+			n := 0
+			for _, r := range t {
+				if r == '#' {
+					n++
+				} else {
+					break
+				}
+			}
+			return n
+		}
+		return -1
 	}
 }

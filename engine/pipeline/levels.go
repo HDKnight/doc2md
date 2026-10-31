@@ -5,18 +5,48 @@ import "strings"
 // seriesRank：越小越粗（仅配合 shouldNestUnder；空系列=无序号小节）。
 func seriesRank(kind string) int {
 	switch kind {
-	case "arab_dun":
+	case "pian":
 		return 1
-	case "cn_dun":
+	case "chapter":
 		return 2
-	case "arab_dot":
+	case "section":
 		return 3
-	case "paren":
+	case "arab_dun":
 		return 4
+	case "cn_dun":
+		return 5
+	case "cn_dot":
+		return 6
+	case "cn_sp":
+		return 7
+	case "cn_paren":
+		return 8
+	case "arab_dot":
+		return 9
+	case "arab_dot2":
+		return 10
+	case "arab_dot3":
+		return 11
+	case "arab_dot4":
+		return 12
+	case "arab_sp":
+		return 13
+	case "paren":
+		return 14
+	case "arab_rparen":
+		return 15
+	case "latin_dun":
+		return 16
+	case "latin_dot":
+		return 17
+	case "latin_rparen":
+		return 18
+	case "circle":
+		return 19
 	case "":
 		return 0
 	default:
-		return 5
+		return 20
 	}
 }
 
@@ -79,10 +109,6 @@ func alignPeerHeadings(segs []seg) {
 			continue
 		}
 		for _, i := range idxs {
-			// 多句论述整段不因同族补抬
-			if expandedProseBlock(segs[i].text) {
-				continue
-			}
 			segs[i].kind = "heading"
 		}
 	}

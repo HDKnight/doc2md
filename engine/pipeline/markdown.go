@@ -35,6 +35,7 @@ func MarkdownFromLines(lines []string) string {
 func renderItems(all []item) string {
 	// 按页 soft-wrap
 	var items []item
+	var prevEdge colEdge
 	pageStart := 0
 	for pageStart < len(all) {
 		page := all[pageStart].page
@@ -45,8 +46,14 @@ func renderItems(all []item) string {
 		// 页内序：与旧 feat 一致，仅 y0/x0（pageItems 已排）。
 		// 不对 structure 块做双栏 ReadingOrder——块级 x0 参差易误判成栏，打乱题序。
 		chunk := all[pageStart:end]
-		bodyEm := medianBodyEm(chunk)
-		items = append(items, softWrapItems(chunk, bodyEm)...)
+		edge := columnRight(chunk)
+		wrapped := softWrapItems(chunk, edge)
+		if len(items) > 0 && len(wrapped) > 0 && wrapAcrossPage(items[len(items)-1], wrapped[0], prevEdge) {
+			mergeItem(&items[len(items)-1], wrapped[0])
+			wrapped = wrapped[1:]
+		}
+		items = append(items, wrapped...)
+		prevEdge = edge
 		pageStart = end
 	}
 

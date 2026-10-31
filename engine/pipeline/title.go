@@ -14,15 +14,19 @@ func markIsHeading(items []item, i int, bodyEm float64) bool {
 	if isOptionLine(it.text) {
 		return false
 	}
-	// 多句论述整段不当标题（含误标的 OCR title）
+	// 数字加空格要等同族出现至少两次
+	if isWeakOrdinal(it.text) {
+		return false
+	}
+	// 已识别的编号不论有几句，都保持该编号
+	if isArabicStem(it.text) || isStructuralLabel(it.text) {
+		return true
+	}
+	// 无编号的多句论述不当标题（含误标的 OCR title）
 	if expandedProseBlock(it.text) {
 		return false
 	}
-	// 短标题：置信 OCR title
 	if typeIsTitle(it.typ) {
-		return true
-	}
-	if isArabicStem(it.text) || isStructuralLabel(it.text) {
 		return true
 	}
 	if bodyEm < 1 {

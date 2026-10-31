@@ -2,12 +2,20 @@ package pipeline
 
 import (
 	"math"
+	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
-func softWrapItems(items []item, bodyEm float64) []item {
+// colEdge is the page's text-column right edge.
+// ok is false when no two lines arrive at the same right edge.
+type colEdge struct {
+	x   float64
+	tol float64
+	ok  bool
+}
+
+func softWrapItems(items []item, edge colEdge) []item {
 	if len(items) == 0 {
 		return nil
 	}
@@ -18,93 +26,122 @@ func softWrapItems(items []item, bodyEm float64) []item {
 			continue
 		}
 		prev := &out[len(out)-1]
-		// 置信 OCR 标题：title 块不与邻行 soft-wrap（正文另段）
-		if typeIsTitle(prev.typ) || typeIsTitle(it.typ) {
+		if !wrapJoin(*prev, it, edge) {
 			out = append(out, it)
 			continue
 		}
-		// 下一行是新序号/选项 → 绝不拼
-		if looksNewBlock(it.text) {
-			out = append(out, it)
-			continue
-		}
-		gap := it.y0 - prev.y1
-		em := math.Max(prev.em, it.em)
-		if em < 1 {
-			em = bodyEm
-		}
-		if em < 1 {
-			em = 12
-		}
-		cont := needsContinuation(prev.text)
-		stemCont := cont && (isArabicStem(prev.text) || isStructuralLabel(prev.text))
-		// 无征兆中间断行：放宽几何，同一序号辖域内尽量拼
-		unheralded := !endsHard(prev.text) || cont
-		gapMax := em * 1.2
-		indentMax := em * 0.9
-		if stemCont || unheralded {
-			gapMax = em * 2.8
-			indentMax = em * 1.6
-		}
-		sameIndent := math.Abs(it.x0-prev.x0) < indentMax
-		near := gap >= -em*0.3 && gap < gapMax
-		if !near || !sameIndent {
-			out = append(out, it)
-			continue
-		}
-		// 完整序号行（不像半截）不与下行正文粘
-		if (isArabicStem(prev.text) || isStructuralLabel(prev.text)) && !cont {
-			out = append(out, it)
-			continue
-		}
-		// 普通行以句号硬收尾且非半截 → 不拼
-		if endsHard(prev.text) && !cont {
-			out = append(out, it)
-			continue
-		}
-		prev.text = joinSoft(prev.text, it.text)
-		prev.y1 = it.y1
-		prev.w = it.w
-		if it.em > prev.em {
-			prev.em = it.em
-		}
+		mergeItem(prev, it)
 	}
 	return out
 }
 
-func needsContinuation(text string) bool {
-	t := strings.TrimRight(strings.TrimSpace(text), " \t")
-	if t == "" {
-		return false
+// columnRight is where body lines share a right edge.
+// A lone longest line does not define the column.
+func columnRight(items []item) colEdge {
+	var xs, hs []float64
+	for _, it := range items {
+		h := it.y1 - it.y0
+		if h < 1 || it.w < 1 {
+			continue
+		}
+		xs = append(xs, it.x0+it.w)
+		hs = append(hs, h)
 	}
-	if unbalancedParen(t) {
-		return true
+	if len(xs) < 2 {
+		return colEdge{}
 	}
-	r, size := utf8.DecodeLastRuneInString(t)
-	const soft = "，,、"
-	const openTail = "的一了是不和与及以把被在为有其并从到按向对给让使"
-	if strings.ContainsRune(soft, r) || strings.ContainsRune(openTail, r) {
-		return true
+	tol := medianFloat(hs)
+	if tol < 1 {
+		tol = 12
 	}
-	rest := strings.TrimRight(t[:len(t)-size], " \t")
-	if rest == "" {
-		return false
+	sort.Float64s(xs)
+	// 只认最靠右的那一组。更短的一簇短行不能充当栏右缘。
+	if xs[len(xs)-1]-xs[len(xs)-2] <= tol {
+		return colEdge{x: xs[len(xs)-1], tol: tol, ok: true}
 	}
-	r2, _ := utf8.DecodeLastRuneInString(rest)
-	return strings.ContainsRune(openTail, r2) && unicode.Is(unicode.Han, r)
+	return colEdge{tol: tol}
 }
 
-func unbalancedParen(s string) bool {
-	bal := 0
-	for _, r := range s {
-		switch r {
-		case '（', '(':
-			bal++
-		case '）', ')':
-			bal--
-		}
+// wrapJoin is true only for a layout wrap:
+// the previous line reaches the column edge, the next line is the immediate
+// next line (or the same baseline split by extraction), and the previous
+// line does not already end a sentence. Same-baseline fragments are one line.
+func wrapJoin(prev, next item, edge colEdge) bool {
+	if !hasLineBox(prev) || !hasLineBox(next) {
+		return false
 	}
-	return bal > 0
+	if sameBaseline(prev, next) {
+		return true
+	}
+	if !reachesColumn(prev, edge) || endsHard(prev.text) {
+		return false
+	}
+	return tightVertical(prev, next)
+}
+
+// wrapAcrossPage joins a full line cut by a page break onto the next page's first line.
+func wrapAcrossPage(prev, next item, edge colEdge) bool {
+	if next.page != prev.page+1 || !hasLineBox(prev) || !hasLineBox(next) {
+		return false
+	}
+	if !reachesColumn(prev, edge) || endsHard(prev.text) {
+		return false
+	}
+	lh := prev.y1 - prev.y0
+	return math.Abs(next.x0-prev.x0) <= lh*2
+}
+
+func hasLineBox(it item) bool {
+	return it.y1 > it.y0 && it.w > 0
+}
+
+func reachesColumn(it item, edge colEdge) bool {
+	if !edge.ok {
+		return false
+	}
+	return edge.x-(it.x0+it.w) <= edge.tol
+}
+
+func sameBaseline(prev, next item) bool {
+	lh := prev.y1 - prev.y0
+	if lh < 1 || math.Abs(next.y0-prev.y0) > lh*0.35 {
+		return false
+	}
+	hgap := next.x0 - (prev.x0 + prev.w)
+	return hgap >= -lh*0.3 && hgap <= lh*2.5
+}
+
+func tightVertical(prev, next item) bool {
+	lh := prev.y1 - prev.y0
+	if lh < 1 {
+		return false
+	}
+	gap := next.y0 - prev.y1
+	return gap >= -lh*0.2 && gap <= lh*0.45
+}
+
+func mergeItem(dst *item, src item) {
+	same := sameBaseline(*dst, src)
+	dst.text = joinSoft(dst.text, src.text)
+	if same {
+		right := dst.x0 + dst.w
+		if src.x0+src.w > right {
+			right = src.x0 + src.w
+		}
+		dst.w = right - dst.x0
+		if src.y1 > dst.y1 {
+			dst.y1 = src.y1
+		}
+	} else {
+		// 下一次判断看最后这一行自己的行框，不沿用上面满行的右缘。
+		dst.x0 = src.x0
+		dst.w = src.w
+		dst.y0 = src.y0
+		dst.y1 = src.y1
+	}
+	if src.em > dst.em {
+		dst.em = src.em
+	}
 }
 
 func endsHard(text string) bool {
@@ -116,49 +153,6 @@ func endsHard(text string) bool {
 	switch r {
 	case '。', '！', '？', '!', '?', '；', ';', '…':
 		return true
-	}
-	return false
-}
-
-func looksNewBlock(text string) bool {
-	t := strings.TrimSpace(text)
-	if t == "" {
-		return true
-	}
-	if isOptionLine(t) || isArabicStem(t) || isStructuralLabel(t) {
-		return true
-	}
-	if strings.HasPrefix(t, "答：") || strings.HasPrefix(t, "答:") {
-		return true
-	}
-	// 有征兆的新段：第一，/首先/第X…
-	if looksEnumeratedClause(t) {
-		return true
-	}
-	return false
-}
-
-// looksEnumeratedClause：「第一，」「首先」等枚举起句（同一序号辖域内的真·新段征兆）。
-func looksEnumeratedClause(text string) bool {
-	t := strings.TrimSpace(text)
-	prefixes := []string{
-		"第一，", "第二，", "第三，", "第四，", "第五，",
-		"第一、", "第二、", "第三、",
-		"首先，", "其次，", "再次，", "最后，", "总之，", "综上，",
-		"首先、", "其次、", "再次、", "最后、",
-	}
-	for _, p := range prefixes {
-		if strings.HasPrefix(t, p) {
-			return true
-		}
-	}
-	r := []rune(t)
-	if len(r) >= 2 && r[0] == '第' {
-		// 第X章/节/部分 / 第一段…；排除「第一次明确」孤立词——用后面是否像序数结构
-		if strings.HasPrefix(t, "第") && (strings.Contains(t, "章") || strings.Contains(t, "节") ||
-			strings.Contains(t, "部分") || strings.Contains(t, "条")) {
-			return true
-		}
 	}
 	return false
 }
