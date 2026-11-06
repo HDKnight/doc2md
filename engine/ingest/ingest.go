@@ -73,7 +73,7 @@ func convertPDF(ctx context.Context, filename string, data []byte, dpi int) (*Re
 			Markdown:  pipeline.MarkdownFromPages(pages),
 			Pages:     len(pageLines),
 			OCRPages:  0,
-			ElapsedMs: time.Since(t0).Milliseconds(),
+			ElapsedMs: wallMs(t0),
 		}, nil
 	}
 	// 扫描件 / 少字 / 乱码 → oar structure JSON
@@ -88,7 +88,7 @@ func convertPDF(ctx context.Context, filename string, data []byte, dpi int) (*Re
 		elapsed = stats.TotalMs
 	}
 	if elapsed <= 0 {
-		elapsed = time.Since(t0).Milliseconds()
+		elapsed = wallMs(t0)
 	}
 	totalPages := len(pageLines)
 	if totalPages < ocrPages {
@@ -160,6 +160,7 @@ func pagesFromPDFLines(pageLines []pdf.PageLines) ([]pipeline.Page, string) {
 }
 
 func convertDOCX(filename string, data []byte) (*Result, error) {
+	t0 := time.Now()
 	blocks, err := docx.Parse(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err
@@ -178,23 +179,26 @@ func convertDOCX(filename string, data []byte) (*Result, error) {
 	text := plain.String()
 	if strings.TrimSpace(text) == "" {
 		return &Result{
-			Filename: filename,
-			Format:   "docx",
-			Engine:   "engine-docx-empty",
-			Text:     "",
-			Markdown: "<!-- docx has no extractable text (likely image-only pages) -->\n",
+			Filename:  filename,
+			Format:    "docx",
+			Engine:    "engine-docx-empty",
+			Text:      "",
+			Markdown:  "<!-- docx has no extractable text (likely image-only pages) -->\n",
+			ElapsedMs: wallMs(t0),
 		}, nil
 	}
 	return &Result{
-		Filename: filename,
-		Format:   "docx",
-		Engine:   "engine-docx",
-		Text:     text,
-		Markdown: pipeline.MarkdownFromLines(lines),
+		Filename:  filename,
+		Format:    "docx",
+		Engine:    "engine-docx",
+		Text:      text,
+		Markdown:  pipeline.MarkdownFromLines(lines),
+		ElapsedMs: wallMs(t0),
 	}, nil
 }
 
 func convertTXT(filename string, data []byte) (*Result, error) {
+	t0 := time.Now()
 	text := decodeText(data)
 	raw := strings.ReplaceAll(text, "\r\n", "\n")
 	raw = strings.ReplaceAll(raw, "\r", "\n")
@@ -207,20 +211,30 @@ func convertTXT(filename string, data []byte) (*Result, error) {
 	}
 	if len(lines) == 0 {
 		return &Result{
-			Filename: filename,
-			Format:   "txt",
-			Engine:   "engine-txt-empty",
-			Text:     "",
-			Markdown: "",
+			Filename:  filename,
+			Format:    "txt",
+			Engine:    "engine-txt-empty",
+			Text:      "",
+			Markdown:  "",
+			ElapsedMs: wallMs(t0),
 		}, nil
 	}
 	return &Result{
-		Filename: filename,
-		Format:   "txt",
-		Engine:   "engine-txt",
-		Text:     strings.Join(lines, "\n") + "\n",
-		Markdown: pipeline.MarkdownFromLines(lines),
+		Filename:  filename,
+		Format:    "txt",
+		Engine:    "engine-txt",
+		Text:      strings.Join(lines, "\n") + "\n",
+		Markdown:  pipeline.MarkdownFromLines(lines),
+		ElapsedMs: wallMs(t0),
 	}, nil
+}
+
+func wallMs(t0 time.Time) int64 {
+	ms := time.Since(t0).Milliseconds()
+	if ms < 1 {
+		return 1
+	}
+	return ms
 }
 
 func decodeText(data []byte) string {

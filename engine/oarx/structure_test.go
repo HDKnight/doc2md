@@ -44,6 +44,43 @@ func TestPreferStructureWarm(t *testing.T) {
 	}
 }
 
+func TestStructureUsesGPUPool(t *testing.T) {
+	if !structureUsesGPUPool("") || !structureUsesGPUPool("cuda:0") {
+		t.Fatal("single GPU device should use the worker pool")
+	}
+	if structureUsesGPUPool("cpu") || structureUsesGPUPool("cpu,cpu") || structureUsesGPUPool("cuda:0,cuda:0") {
+		t.Fatal("cpu and explicit device lists stay on the CLI path")
+	}
+}
+
+func TestSplitPages(t *testing.T) {
+	got := splitPages(16, 4)
+	if len(got) != 4 {
+		t.Fatalf("groups=%d", len(got))
+	}
+	seen := map[int]int{}
+	for _, g := range got {
+		if len(g) != 4 {
+			t.Fatalf("group len %d: %#v", len(g), got)
+		}
+		for _, p := range g {
+			seen[p]++
+		}
+	}
+	for p := 1; p <= 16; p++ {
+		if seen[p] != 1 {
+			t.Fatalf("page %d count %d", p, seen[p])
+		}
+	}
+	got = splitPages(5, 4)
+	if len(got) != 4 || len(got[0]) != 2 || len(got[3]) != 1 || got[3][0] != 5 {
+		t.Fatalf("5/4: %#v", got)
+	}
+	if splitPages(0, 4) != nil {
+		t.Fatal("unknown page count should not split")
+	}
+}
+
 func TestStructurePageBatchSizeEnv(t *testing.T) {
 	t.Setenv("DOC2MD_OAR_STRUCTURE_BATCH", "")
 	if structurePageBatchSize() != 0 {

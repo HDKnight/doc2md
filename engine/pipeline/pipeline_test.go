@@ -74,6 +74,34 @@ func TestWrapJoinFollowsColumnEdge(t *testing.T) {
 	}
 }
 
+func TestShortOptionDoesNotSwallowNextQuestion(t *testing.T) {
+	// 选项框被拉到栏右缘时，也不能把下一题题干或右侧纯数字拼上来。
+	pages := []Page{{
+		Blocks: []Block{
+			{Type: "text", Content: "1. 1945年毛泽东在中共七大预备会议上称（A）为“五四运动时期的总司令”。", BBox: []float64{40, 40, 520, 54}},
+			{Type: "text", Content: "A. 陈独秀", BBox: []float64{40, 60, 520, 74}},
+			{Type: "text", Content: "D. 钱玄同", BBox: []float64{40, 108, 520, 122}},
+			{Type: "text", Content: "2、（A）是比较系统地、正确地传播马克思主义的第一人。", BBox: []float64{40, 124, 520, 138}},
+			{Type: "text", Content: "A. 李大钊", BBox: []float64{40, 140, 160, 154}},
+			{Type: "text", Content: "1", BBox: []float64{170, 140, 182, 154}},
+			{Type: "text", Content: "栏右缘参照行写满用来定栏。", BBox: []float64{40, 180, 520, 194}},
+		},
+	}}
+	md := MarkdownFromPages(pages)
+	if strings.Contains(md, "钱玄同2、") || strings.Contains(md, "钱玄同2") {
+		t.Fatalf("option must not swallow the next stem:\n%s", md)
+	}
+	if strings.Contains(md, "李大钊1") {
+		t.Fatalf("option must not swallow a stray number:\n%s", md)
+	}
+	if !strings.Contains(md, "2、（A）是比较系统") {
+		t.Fatalf("next question lost:\n%s", md)
+	}
+	if !strings.Contains(md, "A. 李大钊") {
+		t.Fatalf("option lost:\n%s", md)
+	}
+}
+
 func TestKeepsPeriodInsideStem(t *testing.T) {
 	pages := []Page{{
 		Blocks: []Block{
@@ -234,6 +262,36 @@ func TestUnheraldedBreakJoinsUnderOrdinal(t *testing.T) {
 	}
 	if strings.Contains(md, "集中统一。第一，") {
 		t.Fatalf("第一， should stay separate block:\n%s", md)
+	}
+}
+
+func TestQuotedSentenceEndDoesNotSwallowTitle(t *testing.T) {
+	pages := []Page{{
+		Blocks: []Block{
+			// 引号前不是句号：仍是折行，要拼。
+			{Type: "text", Content: "最重要的是在党内展开批评和自我批评”", BBox: []float64{40, 40, 520, 54}},
+			{Type: "text", Content: "，说服教育，治病救人。", BBox: []float64{40, 56, 280, 70}},
+			{Type: "text", Content: "栏右缘参照行写满不参与这句。", BBox: []float64{40, 90, 520, 104}},
+			// 句号后只有收引号，下一行是标题：不拼。
+			{Type: "text", Content: "使党的面貌焕然一新。”", BBox: []float64{40, 120, 520, 134}},
+			{Type: "paragraph_title", Content: "政策、纪律和理论教育", BBox: []float64{40, 136, 220, 150}},
+			// 句号本身仍是收句。
+			{Type: "text", Content: "反映的是马克思主义的精神实质。", BBox: []float64{40, 170, 520, 184}},
+			{Type: "text", Content: "下一句另起。", BBox: []float64{40, 186, 180, 200}},
+		},
+	}}
+	md := MarkdownFromPages(pages)
+	if !strings.Contains(md, "自我批评”，说服教育") {
+		t.Fatalf("quote without a sentence end must still join:\n%s", md)
+	}
+	if strings.Contains(md, "焕然一新。”政策、纪律和理论教育") {
+		t.Fatalf("title after a quoted sentence must stay apart:\n%s", md)
+	}
+	if !strings.Contains(md, "政策、纪律和理论教育") {
+		t.Fatalf("title lost:\n%s", md)
+	}
+	if strings.Contains(md, "精神实质。下一句") {
+		t.Fatalf("period must still end the line:\n%s", md)
 	}
 }
 

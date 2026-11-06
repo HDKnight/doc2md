@@ -103,6 +103,7 @@ curl -s -F file=@./sample.docx "http://127.0.0.1:8080/convert?raw=1" -o out.md
 | `DOC2MD_OAR_STRUCTURE_IDLE_SEC` | worker 空闲退出秒数，默认 `60`；`0` 表示不退出 |
 | `DOC2MD_OAR_STRUCTURE_BATCH` | 每次送入的页数；默认整本一次。内存紧时设 `2` |
 | `DOC2MD_OAR_CPU_REPLICAS` | 强制 CPU 路数 1–8 |
+| `DOC2MD_OAR_GPU_REPLICAS` | 强制 GPU 路数 1–4。未设时按页数、显存和剩余内存取更小值，单页 1 路，上限 4 |
 | `DOC2MD_OAR_ZIP_URL` | 含 `oar.exe` 的 zip，给不能编译的机器 |
 
 ## 目录

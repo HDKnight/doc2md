@@ -427,6 +427,204 @@ func countCPUDeviceReplicas(device string) int {
 	return n
 }
 
+// gpuReplicaMax：单卡 structure 副本上限。RTX 2060 上 4 路整本大约快四成，3D 已经打满，再加路不按比例变快。
+const gpuReplicaMax = 4
+
+// GPUStructureReplicas 是这一次 GPU 表征要开的常驻 worker 数。
+//
+//	1 页 → 1（单页延迟最好）
+//	DOC2MD_OAR_GPU_REPLICAS  强制 1–4，仍不会超过页数
+//	否则取显存和系统内存里更小的那个，再封顶 4
+//	显存：floor((显存MB - 预留) / 每路MB)
+//	  DOC2MD_OAR_GPU_REPLICA_MB  每路显存，默认 2048
+//	  DOC2MD_OAR_GPU_RESERVE_MB  留给桌面，默认 1024
+//	内存：floor((可用内存 - 保留) / 每路MB)。每路按热进程约 2GB。
+//	  保留默认 max(2048, 总内存×15%)，避免把机器顶到 96%
+//	  DOC2MD_OAR_GPU_RAM_MB       每路系统内存，默认 2048
+//	  DOC2MD_OAR_GPU_RAM_FREE_MB  至少留出的空闲内存，0 表示用默认
+//	读不到显存且多于 1 页 → 2，再被内存余量压低
+func GPUStructureReplicas(pages int) int {
+	if pages <= 1 {
+		return 1
+	}
+	n := gpuReplicasFromVRAM(dedicatedVRAMMB())
+	totalMB, availMB := systemMemoryMB()
+	if byRAM := gpuReplicasFromRAM(totalMB, availMB); byRAM < n {
+		n = byRAM
+	}
+	if v := strings.TrimSpace(os.Getenv("DOC2MD_OAR_GPU_REPLICAS")); v != "" {
+		if forced, err := strconv.Atoi(v); err == nil && forced >= 1 {
+			n = forced
+		}
+	}
+	if n > gpuReplicaMax {
+		n = gpuReplicaMax
+	}
+	if n > pages {
+		n = pages
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+func gpuReplicasFromRAM(totalMB, availMB int) int {
+	if totalMB <= 0 && availMB <= 0 {
+		return gpuReplicaMax
+	}
+	per := envInt("DOC2MD_OAR_GPU_RAM_MB", 2048)
+	if per < 512 {
+		per = 512
+	}
+	keep := envInt("DOC2MD_OAR_GPU_RAM_FREE_MB", 0)
+	if keep <= 0 {
+		keep = 2048
+		if totalMB > 0 {
+			pct := totalMB * 15 / 100
+			if pct > keep {
+				keep = pct
+			}
+		}
+	}
+	budget := availMB
+	if budget <= 0 && totalMB > 0 {
+		reserve := totalMB * 20 / 100
+		if reserve < 3072 {
+			reserve = 3072
+		}
+		budget = totalMB - reserve
+	}
+	budget -= keep
+	if budget < per {
+		return 1
+	}
+	n := budget / per
+	if n > gpuReplicaMax {
+		n = gpuReplicaMax
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+func systemMemoryMB() (total, avail int) {
+	if systemMemoryMBFn != nil {
+		return systemMemoryMBFn()
+	}
+	return defaultSystemMemoryMB()
+}
+
+var systemMemoryMBFn = defaultSystemMemoryMB
+
+func defaultSystemMemoryMB() (total, avail int) {
+	t, a, ok := systemMemory()
+	if !ok {
+		return 0, 0
+	}
+	return int(t / 1024 / 1024), int(a / 1024 / 1024)
+}
+
+// SetSystemMemoryMBForTest replaces the RAM probe. Pass nil to restore the OS reading.
+func SetSystemMemoryMBForTest(fn func() (int, int)) {
+	if fn == nil {
+		systemMemoryMBFn = defaultSystemMemoryMB
+	} else {
+		systemMemoryMBFn = fn
+	}
+}
+
+func gpuReplicasFromVRAM(vramMB int) int {
+	if vramMB <= 0 {
+		return 2
+	}
+	replicaMB := envInt("DOC2MD_OAR_GPU_REPLICA_MB", 2048)
+	if replicaMB < 512 {
+		replicaMB = 512
+	}
+	reserveMB := envInt("DOC2MD_OAR_GPU_RESERVE_MB", 1024)
+	if reserveMB < 0 {
+		reserveMB = 0
+	}
+	budget := vramMB - reserveMB
+	if budget < replicaMB {
+		return 1
+	}
+	n := budget / replicaMB
+	if n > gpuReplicaMax {
+		n = gpuReplicaMax
+	}
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
+
+// dedicatedVRAMMB is the first NVIDIA GPU's total memory in MiB. 0 if unknown.
+func dedicatedVRAMMB() int {
+	if vramProbeFn != nil {
+		return vramProbeFn()
+	}
+	return defaultVRAMMB()
+}
+
+var vramProbeFn = defaultVRAMMB
+
+var (
+	vramOnce sync.Once
+	vramMB   int
+)
+
+// SetVRAMMBForTest replaces the VRAM probe. Pass nil to restore nvidia-smi.
+func SetVRAMMBForTest(fn func() int) {
+	if fn == nil {
+		vramProbeFn = defaultVRAMMB
+	} else {
+		vramProbeFn = fn
+	}
+}
+
+func defaultVRAMMB() int {
+	vramOnce.Do(func() {
+		vramMB = queryNvidiaVRAMMB()
+	})
+	return vramMB
+}
+
+func queryNvidiaVRAMMB() int {
+	candidates := []string{}
+	if p, err := exec.LookPath("nvidia-smi"); err == nil {
+		candidates = append(candidates, p)
+	}
+	candidates = append(candidates,
+		filepath.Join(os.Getenv("SystemRoot"), "System32", "nvidia-smi.exe"),
+		filepath.Join(os.Getenv("ProgramFiles"), "NVIDIA Corporation", "NVSMI", "nvidia-smi.exe"),
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, path := range candidates {
+		if path == "" || !fileExists(path) {
+			continue
+		}
+		out, err := exec.CommandContext(ctx, path, "--query-gpu=memory.total", "--format=csv,noheader,nounits").Output()
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(strings.TrimSuffix(line, "\r"))
+			if line == "" {
+				continue
+			}
+			n, err := strconv.Atoi(line)
+			if err == nil && n > 0 {
+				return n
+			}
+		}
+	}
+	return 0
+}
+
 // OarStructureEnviron returns os.Environ with ORT/OMP capped for structure replicas.
 func OarStructureEnviron(device string) []string {
 	replicas := countCPUDeviceReplicas(device)
@@ -451,6 +649,36 @@ func OarStructureEnviron(device string) []string {
 			}
 		}
 		if skip {
+			continue
+		}
+		out = append(out, e)
+	}
+	for k, v := range overrides {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
+// structureWorkerEnviron is the GPU worker environment.
+// intraThreads > 0 caps ORT/OMP for that many sibling processes.
+func structureWorkerEnviron(intraThreads int) []string {
+	env := OarStructureEnviron("")
+	if intraThreads <= 0 {
+		return env
+	}
+	threads := strconv.Itoa(intraThreads)
+	overrides := map[string]string{
+		"OMP_NUM_THREADS":          threads,
+		"ORT_INTRA_OP_NUM_THREADS": threads,
+		"ORT_INTER_OP_NUM_THREADS": "1",
+	}
+	out := make([]string, 0, len(env))
+	for _, e := range env {
+		key := e
+		if i := strings.IndexByte(e, '='); i > 0 {
+			key = e[:i]
+		}
+		if _, skip := overrides[key]; skip {
 			continue
 		}
 		out = append(out, e)

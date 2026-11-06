@@ -40,7 +40,7 @@ txt  ─→ 文本行 ───────────────────�
 
 ## 扫描件
 
-扫描 PDF 整本送给 oar（常驻 `oar_structure_worker`，否则回退 `oar` CLI）。空闲默认 60 秒退出。设备：有可用 GPU / DirectML 用 GPU，否则多路 CPU。内存紧时设 `DOC2MD_OAR_STRUCTURE_BATCH=2`。
+扫描 PDF 整本送给 oar（常驻 `oar_structure_worker`，否则回退 `oar` CLI）。有独显且多于一页时，按显存和剩余内存取更小的路数，最多 4 个常驻进程分头跑；单页仍是一路。空闲默认 60 秒退出，内存变紧时多出来的进程会马上关掉。设备：有可用 GPU / DirectML 用 GPU，否则多路 CPU。内存紧时设 `DOC2MD_OAR_STRUCTURE_BATCH=2`，这时不再加 GPU 副本。
 
 ## 不做什么
 

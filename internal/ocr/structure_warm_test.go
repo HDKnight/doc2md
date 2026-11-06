@@ -81,3 +81,15 @@ func TestStructureWarm_RunAndIdleKill(t *testing.T) {
 	}
 	t.Fatal("worker should be killed after idle")
 }
+
+func TestStructurePoolReleaseAbove(t *testing.T) {
+	p := &StructurePool{}
+	_ = p.Slot(2)
+	p.ReleaseAbove(1)
+	p.mu.Lock()
+	n := len(p.slots)
+	p.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("slots=%d want 1", n)
+	}
+}

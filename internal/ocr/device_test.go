@@ -177,3 +177,68 @@ func TestSystemMemory(t *testing.T) {
 		t.Fatalf("total=%d avail=%d", total, avail)
 	}
 }
+
+func TestGPUStructureReplicas(t *testing.T) {
+	t.Setenv("DOC2MD_OAR_GPU_REPLICAS", "")
+	t.Setenv("DOC2MD_OAR_GPU_REPLICA_MB", "")
+	t.Setenv("DOC2MD_OAR_GPU_RESERVE_MB", "")
+	t.Setenv("DOC2MD_OAR_GPU_RAM_MB", "")
+	t.Setenv("DOC2MD_OAR_GPU_RAM_FREE_MB", "")
+	t.Cleanup(func() {
+		SetVRAMMBForTest(nil)
+		SetSystemMemoryMBForTest(nil)
+	})
+	SetSystemMemoryMBForTest(func() (int, int) { return 32768, 24576 })
+
+	SetVRAMMBForTest(func() int { return 12288 })
+	if got := GPUStructureReplicas(1); got != 1 {
+		t.Fatalf("1 page → 1, got %d", got)
+	}
+	if got := GPUStructureReplicas(2); got != 2 {
+		t.Fatalf("2 pages on 12GB → 2, got %d", got)
+	}
+	if got := GPUStructureReplicas(16); got != 4 {
+		t.Fatalf("16 pages on 12GB → 4, got %d", got)
+	}
+
+	SetVRAMMBForTest(func() int { return 8192 })
+	if got := GPUStructureReplicas(16); got != 3 {
+		t.Fatalf("8GB → 3, got %d", got)
+	}
+
+	SetVRAMMBForTest(func() int { return 4096 })
+	if got := GPUStructureReplicas(16); got != 1 {
+		t.Fatalf("4GB → 1, got %d", got)
+	}
+
+	SetVRAMMBForTest(func() int { return 0 })
+	if got := GPUStructureReplicas(16); got != 2 {
+		t.Fatalf("unknown VRAM → 2, got %d", got)
+	}
+
+	t.Setenv("DOC2MD_OAR_GPU_REPLICAS", "1")
+	if got := GPUStructureReplicas(16); got != 1 {
+		t.Fatalf("force 1, got %d", got)
+	}
+	t.Setenv("DOC2MD_OAR_GPU_REPLICAS", "8")
+	if got := GPUStructureReplicas(16); got != 4 {
+		t.Fatalf("force 8 clamps to 4, got %d", got)
+	}
+	t.Setenv("DOC2MD_OAR_GPU_REPLICAS", "4")
+	if got := GPUStructureReplicas(3); got != 3 {
+		t.Fatalf("force 4 but only 3 pages → 3, got %d", got)
+	}
+
+	t.Setenv("DOC2MD_OAR_GPU_REPLICAS", "")
+	SetVRAMMBForTest(func() int { return 12288 })
+	// 16GB 机器只剩约 5.4GB：留出 15% 之后装不下一份 2GB 热进程，保持 1 路。
+	SetSystemMemoryMBForTest(func() (int, int) { return 16384, 5400 })
+	if got := GPUStructureReplicas(16); got != 1 {
+		t.Fatalf("tight 16GB RAM → 1, got %d", got)
+	}
+	// 同样 16GB，空闲约 9GB 时装得下 3 路。
+	SetSystemMemoryMBForTest(func() (int, int) { return 16384, 9000 })
+	if got := GPUStructureReplicas(16); got != 3 {
+		t.Fatalf("9GB free on 16GB → 3, got %d", got)
+	}
+}

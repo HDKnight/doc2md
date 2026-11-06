@@ -16,6 +16,7 @@ func main() {
 	engine := ocr.NewFromEnv()
 	defer engine.Close()
 	defer ocr.DefaultPool().Close()
+	defer ocr.DefaultStructurePool().Close()
 	if ocr.Configured(engine) {
 		// 默认不预热 PP-OCR：常驻 worker 会占内存/ORT 线程，把表征管线的 oar structure
 		// 从 ~15s 拖到 ~34s（同 PDF 实测）。rules 管线首次 OCR 时仍会按需加载。

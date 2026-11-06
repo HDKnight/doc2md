@@ -19,7 +19,7 @@ type Result struct {
 	OCRStats  *OCRStats  `json:"ocr_stats,omitempty"`
 }
 
-// Recognize is shown in the UI: page count, OCR page count, and pages per second.
+// Recognize is shown in the UI: page count, OCR page count, total time, and pages per second.
 type Recognize struct {
 	Pages       int     `json:"pages"`
 	OCRPages    int     `json:"ocr_pages"`

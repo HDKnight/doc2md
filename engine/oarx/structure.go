@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"doc2md/engine/pipeline"
@@ -77,54 +78,78 @@ func RunStructureJSON(ctx context.Context, pdfData []byte, dpi int) (pages []pip
 		devLabel = devLabel + ";" + note
 	}
 
-	nHint := pdf.PageCountHint(pdfData)
-	batches := pageBatches(nHint, batchSize)
-
 	mode := "cli"
 	warm := ocr.DefaultStructureWarm()
 	// 多路 CPU：oar CLI 按副本并行翻页；warm worker 单会话串行，同机实测更慢（~26s vs ~15s/11p）。
 	useWarm := warm.Available() && preferStructureWarm(dev)
 
-	for bi, batch := range batches {
-		select {
-		case <-ctx.Done():
-			return nil, "", nil, ctx.Err()
-		default:
+	nHint := pdf.PageCountFile(pdfPath, pdfData)
+	replicas := 1
+	if useWarm && structureUsesGPUPool(dev) {
+		if batchSize == 0 {
+			replicas = ocr.GPUStructureReplicas(nHint)
 		}
-		batchOut := outDir
-		if len(batches) > 1 {
-			batchOut = filepath.Join(outDir, fmt.Sprintf("b%d", bi))
-			if err := os.MkdirAll(batchOut, 0o755); err != nil {
-				return nil, "", nil, err
-			}
+		ocr.DefaultStructurePool().ReleaseAbove(replicas)
+	}
+	if replicas > 1 {
+		fmt.Fprintf(os.Stderr, "doc2md: structure GPU replicas=%d pages=%d\n", replicas, nHint)
+		threads := ocr.StructureIntraOpThreads(replicas)
+		pool := ocr.DefaultStructurePool()
+		for i := 0; i < replicas; i++ {
+			pool.Slot(i).Prepare(threads)
 		}
-		usedWarm := false
-		if useWarm {
-			var werr error
-			if len(batch) == 0 {
-				_, werr = warm.RunStructure(ctx, pdfPath, batchOut, dpi, "json")
-			} else {
-				_, werr = warm.RunStructurePages(ctx, pdfPath, batchOut, dpi, "json", batch)
-			}
-			if werr != nil {
-				fmt.Fprintf(os.Stderr, "doc2md/engine: structure warm batch %v failed (%v); fallback CLI\n", batch, werr)
-				_ = os.RemoveAll(batchOut)
-				_ = os.MkdirAll(batchOut, 0o755)
-			} else {
-				usedWarm = true
-				mode = "warm"
-			}
-		}
-		if !usedWarm {
-			if err := runCLIStructure(ctx, pdfPath, batchOut, dpi, dev, batch); err != nil {
+		if err := runWarmParallel(ctx, pool, pdfPath, outDir, dpi, nHint, replicas); err != nil {
+			fmt.Fprintf(os.Stderr, "doc2md/engine: structure parallel failed (%v); fallback CLI\n", err)
+			_ = removeOutJSON(outDir)
+			if err := runCLIStructure(ctx, pdfPath, outDir, dpi, dev, nil); err != nil {
 				return nil, "", nil, err
 			}
 			mode = "cli"
+		} else {
+			mode = fmt.Sprintf("warmx%d", replicas)
 		}
-		// 分批目录合并到 outDir 根（统一读）
-		if batchOut != outDir {
-			if err := mergeJSONDir(batchOut, outDir); err != nil {
-				return nil, "", nil, err
+	} else {
+		batches := pageBatches(nHint, batchSize)
+		for bi, batch := range batches {
+			select {
+			case <-ctx.Done():
+				return nil, "", nil, ctx.Err()
+			default:
+			}
+			batchOut := outDir
+			if len(batches) > 1 {
+				batchOut = filepath.Join(outDir, fmt.Sprintf("b%d", bi))
+				if err := os.MkdirAll(batchOut, 0o755); err != nil {
+					return nil, "", nil, err
+				}
+			}
+			usedWarm := false
+			if useWarm {
+				var werr error
+				if len(batch) == 0 {
+					_, werr = warm.RunStructure(ctx, pdfPath, batchOut, dpi, "json")
+				} else {
+					_, werr = warm.RunStructurePages(ctx, pdfPath, batchOut, dpi, "json", batch)
+				}
+				if werr != nil {
+					fmt.Fprintf(os.Stderr, "doc2md/engine: structure warm batch %v failed (%v); fallback CLI\n", batch, werr)
+					_ = os.RemoveAll(batchOut)
+					_ = os.MkdirAll(batchOut, 0o755)
+				} else {
+					usedWarm = true
+					mode = "warm"
+				}
+			}
+			if !usedWarm {
+				if err := runCLIStructure(ctx, pdfPath, batchOut, dpi, dev, batch); err != nil {
+					return nil, "", nil, err
+				}
+				mode = "cli"
+			}
+			if batchOut != outDir {
+				if err := mergeJSONDir(batchOut, outDir); err != nil {
+					return nil, "", nil, err
+				}
 			}
 		}
 	}
@@ -168,6 +193,103 @@ func preferStructureWarm(dev string) bool {
 		}
 	}
 	return n < 2
+}
+
+// structureUsesGPUPool：独显单路（DirectML auto 或 cuda:N）才在进程外再拆页。
+// cpu×N 已经由 oar CLI 自己并行；逗号设备列表也交给 CLI。
+func structureUsesGPUPool(dev string) bool {
+	dev = strings.TrimSpace(dev)
+	if dev == "" {
+		return true
+	}
+	if strings.Contains(dev, ",") {
+		return false
+	}
+	low := strings.ToLower(dev)
+	if strings.Contains(low, "cpu") {
+		return false
+	}
+	return strings.HasPrefix(low, "cuda:")
+}
+
+func splitPages(n, replicas int) [][]int {
+	if n < 1 || replicas < 1 {
+		return nil
+	}
+	if replicas > n {
+		replicas = n
+	}
+	base := n / replicas
+	extra := n % replicas
+	out := make([][]int, 0, replicas)
+	page := 1
+	for i := 0; i < replicas; i++ {
+		size := base
+		if i < extra {
+			size++
+		}
+		group := make([]int, 0, size)
+		for j := 0; j < size; j++ {
+			group = append(group, page)
+			page++
+		}
+		out = append(out, group)
+	}
+	return out
+}
+
+func runWarmParallel(ctx context.Context, pool *ocr.StructurePool, pdfPath, outDir string, dpi, nPages, replicas int) error {
+	groups := splitPages(nPages, replicas)
+	if len(groups) < 2 {
+		return fmt.Errorf("not enough pages to split (%d)", nPages)
+	}
+	gctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(groups))
+	for i, group := range groups {
+		wg.Add(1)
+		go func(i int, group []int) {
+			defer wg.Done()
+			sub := filepath.Join(outDir, fmt.Sprintf("w%d", i))
+			if err := os.MkdirAll(sub, 0o755); err != nil {
+				errCh <- err
+				cancel()
+				return
+			}
+			if _, err := pool.Slot(i).RunStructurePages(gctx, pdfPath, sub, dpi, "json", group); err != nil {
+				errCh <- err
+				cancel()
+				return
+			}
+			if err := mergeJSONDir(sub, outDir); err != nil {
+				errCh <- err
+				cancel()
+			}
+		}(i, group)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func removeOutJSON(dir string) error {
+	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if err := os.Remove(f); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func pageBatches(pageCount, batch int) [][]int {

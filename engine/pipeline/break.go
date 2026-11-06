@@ -70,6 +70,10 @@ func wrapJoin(prev, next item, edge colEdge) bool {
 	if !hasLineBox(prev) || !hasLineBox(next) {
 		return false
 	}
+	// 下一行已是新题号或新选项：宁可放过，也不把题干接到上一行。
+	if joinsAcrossItem(prev, next) {
+		return false
+	}
 	if sameBaseline(prev, next) {
 		return true
 	}
@@ -84,11 +88,49 @@ func wrapAcrossPage(prev, next item, edge colEdge) bool {
 	if next.page != prev.page+1 || !hasLineBox(prev) || !hasLineBox(next) {
 		return false
 	}
+	if joinsAcrossItem(prev, next) {
+		return false
+	}
 	if !reachesColumn(prev, edge) || endsHard(prev.text) {
 		return false
 	}
 	lh := prev.y1 - prev.y0
 	return math.Abs(next.x0-prev.x0) <= lh*2
+}
+
+// joinsAcrossItem：下一行自己就是题号、选项，或选项右侧多出来的纯数字。
+func joinsAcrossItem(prev, next item) bool {
+	if freshStart(next.text) {
+		return true
+	}
+	return isOptionLine(prev.text) && bareNumber(next.text)
+}
+
+func freshStart(text string) bool {
+	t := strings.TrimSpace(text)
+	if isOptionLine(t) {
+		return true
+	}
+	kind, _ := seriesOf(t)
+	return kind != ""
+}
+
+func bareNumber(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" {
+		return false
+	}
+	n := 0
+	for _, r := range t {
+		if !isDigit(r) {
+			return false
+		}
+		n++
+		if n > 3 {
+			return false
+		}
+	}
+	return true
 }
 
 func hasLineBox(it item) bool {
@@ -146,12 +188,28 @@ func mergeItem(dst *item, src item) {
 
 func endsHard(text string) bool {
 	t := strings.TrimSpace(text)
-	if t == "" {
-		return true
+	for {
+		if t == "" {
+			return true
+		}
+		r, size := utf8.DecodeLastRuneInString(t)
+		// 句号后面的收引号不另起一句，跳过去再看。
+		// 引号前不是句末标点时仍视为折行，例如“批评”后接“，说服”。
+		if isClosingQuote(r) {
+			t = strings.TrimSpace(t[:len(t)-size])
+			continue
+		}
+		switch r {
+		case '。', '！', '？', '!', '?', '；', ';', '…':
+			return true
+		}
+		return false
 	}
-	r, _ := utf8.DecodeLastRuneInString(t)
+}
+
+func isClosingQuote(r rune) bool {
 	switch r {
-	case '。', '！', '？', '!', '?', '；', ';', '…':
+	case '"', '\'', '”', '’', '」', '』', '＂':
 		return true
 	}
 	return false

@@ -11,6 +11,7 @@
   const meta = document.getElementById("meta");
   const statPages = document.getElementById("statPages");
   const statOCR = document.getElementById("statOCR");
+  const statDuration = document.getElementById("statDuration");
   const statRate = document.getElementById("statRate");
   const previewView = document.getElementById("previewView");
   const sourceView = document.getElementById("sourceView");
@@ -424,6 +425,7 @@
     meta.innerHTML = "";
     statPages.textContent = "—";
     statOCR.textContent = "—";
+    statDuration.textContent = "—";
     statRate.textContent = "—";
     previewView.innerHTML = "";
     sourceView.textContent = "";
@@ -508,7 +510,9 @@
       fillViews();
       applyTabVisibility();
       resultPanel.hidden = false;
-      setStatus("info", `转换完成 · 页数 ${shown.pages} · OCR ${shown.ocr} 页 · ${shown.rate}`);
+      const done = [`页数 ${shown.pages}`, `OCR ${shown.ocr} 页`, `总时长 ${shown.duration}`];
+      if (shown.rate && shown.rate !== "—") done.push(shown.rate);
+      setStatus("info", `转换完成 · ${done.join(" · ")}`);
     } catch (err) {
       setStatus("error", err.message || String(err));
     } finally {
@@ -559,14 +563,32 @@
     const rate = Number(rec.pages_per_sec || 0);
     const pagesText = isPDF ? String(pages) : "—";
     const ocrText = String(ocr);
+    const durationText = formatDuration(rec.total_ms);
     let rateText = "—";
     if (rate > 0) {
       rateText = `${rate >= 10 ? rate.toFixed(1) : rate.toFixed(2)} 页/秒`;
     }
     statPages.textContent = pagesText;
     statOCR.textContent = ocrText;
+    statDuration.textContent = durationText;
     statRate.textContent = rateText;
-    return { pages: pagesText, ocr: ocrText, rate: rateText };
+    return { pages: pagesText, ocr: ocrText, duration: durationText, rate: rateText };
+  }
+
+  function formatDuration(ms) {
+    const n = Number(ms);
+    if (!Number.isFinite(n) || n <= 0) return "—";
+    if (n < 10) return `${Math.round(n)} 毫秒`;
+    const sec = n / 1000;
+    if (sec < 60) return `${trimSeconds(sec)} 秒`;
+    const minutes = Math.floor(sec / 60);
+    const rest = sec - minutes * 60;
+    return `${minutes} 分 ${trimSeconds(rest)} 秒`;
+  }
+
+  function trimSeconds(sec) {
+    const digits = sec >= 10 ? 1 : 2;
+    return sec.toFixed(digits).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
   }
 
 })();

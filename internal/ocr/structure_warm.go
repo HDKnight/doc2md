@@ -66,20 +66,31 @@ type structureWarmReply struct {
 
 // StructureWarm holds one long-lived oar_structure_worker; idle → Kill.
 type StructureWarm struct {
-	mu       sync.Mutex
-	bin      string
-	cmd      *exec.Cmd
-	stdin    io.WriteCloser
-	sc       *bufio.Scanner
-	lastUsed time.Time
-	idleSec  int
-	watchOnce sync.Once
+	mu           sync.Mutex
+	bin          string
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	sc           *bufio.Scanner
+	lastUsed     time.Time
+	idleSec      int
+	intraThreads int
+	watchOnce    sync.Once
 }
 
 var defaultStructureWarm = &StructureWarm{}
 
 // DefaultStructureWarm is the process-wide warm structure sidecar.
 func DefaultStructureWarm() *StructureWarm { return defaultStructureWarm }
+
+// Prepare sets ORT/OMP threads used the next time this worker starts.
+// A worker that is already running keeps its current environment.
+func (w *StructureWarm) Prepare(intraThreads int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.cmd == nil && intraThreads > 0 {
+		w.intraThreads = intraThreads
+	}
+}
 
 // Available reports whether a structure worker binary exists.
 func (w *StructureWarm) Available() bool {
@@ -195,7 +206,7 @@ func (w *StructureWarm) ensureLocked(ctx context.Context) error {
 		return nil
 	}
 	cmd := exec.CommandContext(context.Background(), w.bin, "--worker")
-	cmd.Env = OarStructureEnviron("")
+	cmd.Env = structureWorkerEnviron(w.intraThreads)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return err
@@ -240,6 +251,67 @@ func (w *StructureWarm) killLocked() error {
 	w.cmd = nil
 	w.sc = nil
 	return nil
+}
+
+// StructurePool is a set of warm structure workers. Slot 0 is DefaultStructureWarm.
+type StructurePool struct {
+	mu    sync.Mutex
+	slots []*StructureWarm
+}
+
+var defaultStructurePool = &StructurePool{}
+
+// DefaultStructurePool is the process-wide set of structure workers.
+func DefaultStructurePool() *StructurePool { return defaultStructurePool }
+
+// Slot returns worker i, creating it if needed. Index 0 is the original warm worker.
+func (p *StructurePool) Slot(i int) *StructureWarm {
+	if i < 0 {
+		i = 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for len(p.slots) <= i {
+		if len(p.slots) == 0 {
+			p.slots = append(p.slots, DefaultStructureWarm())
+			continue
+		}
+		p.slots = append(p.slots, &StructureWarm{})
+	}
+	return p.slots[i]
+}
+
+// ReleaseAbove stops workers past n so a tighter memory reading can drop extra copies.
+// Slot 0 stays. n < 1 is treated as 1.
+func (p *StructurePool) ReleaseAbove(n int) {
+	if n < 1 {
+		n = 1
+	}
+	p.mu.Lock()
+	if len(p.slots) <= n {
+		p.mu.Unlock()
+		return
+	}
+	extra := append([]*StructureWarm(nil), p.slots[n:]...)
+	p.slots = p.slots[:n]
+	p.mu.Unlock()
+	for _, s := range extra {
+		_ = s.Close()
+	}
+}
+
+// Close stops every warm structure worker.
+func (p *StructurePool) Close() error {
+	p.mu.Lock()
+	slots := append([]*StructureWarm(nil), p.slots...)
+	p.mu.Unlock()
+	var err error
+	for _, s := range slots {
+		if e := s.Close(); e != nil {
+			err = e
+		}
+	}
+	return err
 }
 
 func (w *StructureWarm) idleLoop() {
